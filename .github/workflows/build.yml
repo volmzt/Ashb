@@ -27,16 +27,24 @@ jobs:
         run: |
           set -euo pipefail
           if compgen -G "parts/part_*.py" > /dev/null; then
+            echo "dir=AERO_SHARE" >> "$GITHUB_OUTPUT"
+            echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
             COUNT=$(find parts -maxdepth 1 -name 'part_*.py' | wc -l)
             echo "Found $COUNT part(s)"
             if [ "$COUNT" -ne 8 ]; then
               echo "ERROR: need exactly 8 parts (part_01.py .. part_08.py)"
               exit 1
             fi
-            cat parts/part_*.py > make_project.py
+            for f in parts/part_*.py; do
+              python3 -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" "$f" \
+                || { echo "SYNTAX ERROR IN $f"; exit 1; }
+            done
+            : > make_project.py
+            for f in parts/part_*.py; do
+              cat "$f" >> make_project.py
+              printf '\n\n' >> make_project.py
+            done
             python3 make_project.py
-            echo "dir=AERO_SHARE" >> "$GITHUB_OUTPUT"
-            echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
           else
             ARCHIVE=$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)
             if [ -z "$ARCHIVE" ]; then
@@ -127,12 +135,10 @@ jobs:
           retention-days: 14
 
       - name: Upload reports on failure
-        if: failure()
+        if: failure() && steps.proj.outputs.dir != ''
         uses: actions/upload-artifact@v4
         with:
           name: build-reports
-          path: |
-            ${{ steps.proj.outputs.dir }}/**/build/reports/**
-            ${{ steps.proj.outputs.dir }}/**/build/outputs/logs/**
+          path: ${{ steps.proj.outputs.dir }}/app/build/reports
           if-no-files-found: ignore
           retention-days: 7
