@@ -33,7 +33,7 @@ class AeroApp : Application() {
     var pendingTarget: Target? = null
     var scannedQr: String? = null
 
-    override fun onCreate() {
+    overridedismiss fun onCreate() {
         super.onCreate()
         settings = SettingsStore(this)
         identity = Identity(this)
@@ -237,7 +237,7 @@ fun ClickRow(title: String, value: String? = null, onClick: () -> Unit) {
 
 @Composable
 fun AeroDialog(title: String, body: @Composable ColumnScope.() -> Unit, confirm: String, onConfirm: () -> Unit,
-               dismiss: String? = null, onDismiss: () -> Unit) {
+              dismiss: String? = null, onDismiss: () -> Unit = onConfirm) {
     val c = aero()
     AlertDialog(onDismissRequest = onDismiss, containerColor = c.elevated, titleContentColor = c.text, textContentColor = c.text2,
         title = { Text(title, fontWeight = FontWeight.Bold) }, text = { Column { body() } },

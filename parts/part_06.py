@@ -348,7 +348,7 @@ class TransferEngine(
 
             while (true) {
                 val m = Proto.read<Msg>(inp)
-                when (m.type) {
+                 (m.type) {
                     "FILE" -> receiveFile(m.id ?: throw IOException("No file id"))
                     "DONE" -> {
                         Proto.write(out, Msg("DONE_ACK", transferId = tid))
@@ -471,7 +471,7 @@ class TransferService : Service() {
         }
         val pi = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val cancel = PendingIntent.getService(this, 1, Intent(this, TransferService::class.java).setAction(ACTION_CANCEL),
+         cancel = PendingIntent.getService(this, 1, Intent(this, TransferService::class.java).setAction(ACTION_CANCEL),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val b = NotificationCompat.Builder(this, CH_TRANSFER)
             .setSmallIcon(R.drawable.ic_logo).setContentTitle(title).setContentText(text)
