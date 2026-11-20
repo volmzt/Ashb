@@ -121,7 +121,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import com.aero.share.core.Hash
-import org.bouncycastle.asn1.nist.NISTObjectIdentifiers
+import org.bouncycastle.asn1.x9.X9ObjectIdentifiers
 import org.bouncycastle.asn1.x500.X500Name
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier
 import org.bouncycastle.asn1.x509.SubjectPublicKeyInfo
@@ -187,7 +187,7 @@ class DeviceTls(private val ctx: Context) {
         val signer = object : ContentSigner {
             val buf = ByteArrayOutputStream()
             override fun getAlgorithmIdentifier(): AlgorithmIdentifier =
-                AlgorithmIdentifier(NISTObjectIdentifiers.ecdsa_with_SHA256)
+                AlgorithmIdentifier(X9ObjectIdentifiers.ecdsa_with_SHA256)
             override fun getOutputStream(): OutputStream = buf
             override fun getSignature(): ByteArray = Signature.getInstance("SHA256withECDSA").run {
                 initSign(priv); update(buf.toByteArray()); sign()
