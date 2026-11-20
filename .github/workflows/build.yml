@@ -52,7 +52,7 @@ jobs:
             echo "bootstrapped=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Auto-fix sources and dump diagnostics
+      - name: Auto-fix sources
         working-directory: ${{ steps.proj.outputs.dir }}
         run: |
           python3 - <<'PY'
@@ -67,18 +67,58 @@ jobs:
           else:
               print("OK: AeroDialog")
 
-          ap = root / "AeroApp.kt"
-          lines = ap.read_text(encoding="utf-8").splitlines()
-          out, in_class, dropped = [], False, 0
-          for ln in lines:
-              if ln.startswith("class AeroApp"):
-                  in_class = True
-              if in_class and ln.strip().startswith("import "):
-                  dropped += 1
-                  continue
-              out.append(ln)
-          ap.write_text("\n".join(out) + "\n", encoding="utf-8")
-          print("AeroApp: dropped stray imports inside class =", dropped)
+          A = [
+            "package com.aero.share",
+            "",
+            "import android.app.Application",
+            "import com.aero.share.core.Identity",
+            "import com.aero.share.data.*",
+            "import com.aero.share.net.DeviceTls",
+            "import com.aero.share.net.Discovery",
+            "import com.aero.share.net.Target",
+            "import com.aero.share.net.TransferEngine",
+            "import com.aero.share.service.TransferService",
+            "import com.aero.share.storage.OutFile",
+            "import com.aero.share.storage.ReceiverStore",
+            "import kotlinx.coroutines.*",
+            "import kotlinx.coroutines.flow.*",
+            "",
+            "class AeroApp : Application() {",
+            "    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)",
+            "    lateinit var settings: SettingsStore",
+            "    lateinit var identity: Identity",
+            "    lateinit var tls: DeviceTls",
+            "    lateinit var devices: DeviceRepo",
+            "    lateinit var history: HistoryRepo",
+            "    lateinit var store: ReceiverStore",
+            "    lateinit var engine: TransferEngine",
+            "    lateinit var discovery: Discovery",
+            "    var settingsNow = AppSettings()",
+            "    var pendingFiles: List<OutFile> = emptyList()",
+            "    var pendingTotal: Long = 0L",
+            "    var pendingTarget: Target? = null",
+            "    var scannedQr: String? = null",
+            "",
+            "    override fun onCreate() {",
+            "        super.onCreate()",
+            "        settings = SettingsStore(this)",
+            "        identity = Identity(this)",
+            "        tls = DeviceTls(this)",
+            "        val db = AeroDb.build(this)",
+            "        devices = DeviceRepo(db.devices())",
+            "        history = HistoryRepo(db.history())",
+            "        store = ReceiverStore(this)",
+            "        engine = TransferEngine(this, tls, identity, store, devices, history, settings, scope)",
+            "        discovery = Discovery(this, identity, scope)",
+            "        TransferService.createChannels(this)",
+            "        runBlocking { runCatching { settingsNow = settings.flow.first() } }",
+            "        scope.launch { settings.flow.collect { settingsNow = it } }",
+            "        scope.launch(Dispatchers.IO) { runCatching { tls.certificate } }",
+            "    }",
+            "}",
+          ]
+          (root / "AeroApp.kt").write_text("\n".join(A) + "\n", encoding="utf-8")
+          print("REWROTE: AeroApp.kt")
 
           te = root / "net/TransferEngine.kt"
           s = te.read_text(encoding="utf-8")
@@ -114,21 +154,15 @@ jobs:
             "                }",
             "            }",
           ]
-          block = "\n".join(L) + "\n"
           i = s.find("            while (true) {")
           j = s.find("        } catch (e: IntegrityException)")
           if i != -1 and j != -1 and j > i:
-              s = s[:i] + block + s[j:]
-              print("FIXED: dispatch loop rewritten")
+              s = s[:i] + "\n".join(L) + "\n" + s[j:]
+              print("FIXED: dispatch loop")
           else:
-              print("WARN: markers not found", i, j)
+              print("OK: dispatch loop")
           te.write_text(s, encoding="utf-8")
           PY
-          echo "===== AeroApp.kt 1-50 ====="
-          nl -ba app/src/main/java/com/aero/share/AeroApp.kt | sed -n '1,50p'
-          echo "===== TransferEngine.kt 325-380 ====="
-          nl -ba app/src/main/java/com/aero/share/net/TransferEngine.kt | sed -n '325,380p'
-          echo "===== END ====="
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
