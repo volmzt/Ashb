@@ -1,71 +1,31 @@
-name: AERO SHARE Android Build
-
-on:
-  push:
-  pull_request:
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Locate or generate project
-        id: proj
-        shell: bash
-        run: |
-          set -euo pipefail
-          if compgen -G "parts/part_*.py" > /dev/null; then
-            echo "dir=AERO_SHARE" >> "$GITHUB_OUTPUT"
-            echo "bootstrapped=true" >> "$GITHUB_OUTPUT"
-            COUNT=$(find parts -maxdepth 1 -name 'part_*.py' | wc -l)
-            echo "Found $COUNT part(s)"
-            if [ "$COUNT" -ne 8 ]; then echo "ERROR: need 8 parts"; exit 1; fi
-            for f in parts/part_*.py; do
-              python3 -c "import ast,sys; ast.parse(open(sys.argv[1],encoding='utf-8').read())" "$f" \
-                || { echo "SYNTAX ERROR IN $f"; exit 1; }
-            done
-            : > make_project.py
-            for f in parts/part_*.py; do
-              cat "$f" >> make_project.py
-              printf '\n\n' >> make_project.py
-            done
-            python3 make_project.py
-          else
-            ARCHIVE=$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)
-            if [ -z "$ARCHIVE" ]; then echo "ERROR: no parts and no ZIP"; exit 1; fi
-            mkdir -p extracted
-            unzip -q "$ARCHIVE" -d extracted
-            DIR=$(find extracted -name settings.gradle.kts -printf '%h\n' | head -n 1)
-            if [ -z "$DIR" ]; then echo "ERROR: no Gradle project"; exit 1; fi
-            echo "dir=$DIR" >> "$GITHUB_OUTPUT"
-            echo "bootstrapped=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Auto-fix sources and dump diagnostics
+- name: Auto-fix sources and dump diagnostics
         working-directory: ${{ steps.proj.outputs.dir }}
         run: |
           python3 - <<'PY'
           import pathlib
           root = pathlib.Path("app/src/main/java/com/aero/share")
+
           th = root / "ui/AeroTheme.kt"
           s = th.read_text(encoding="utf-8")
           if "onDismiss: () -> Unit)" in s:
               th.write_text(s.replace("onDismiss: () -> Unit)", "onDismiss: () -> Unit = onConfirm)"), encoding="utf-8")
-              print("FIXED: AeroDialog onDismiss default")
+              print("FIXED: AeroDialog default")
           else:
-              print("OK: AeroDialog already has default")
+              print("OK: AeroDialog")
+
+          ap = root / "AeroApp.kt"
+          lines = ap.read_text(encoding="utf-8").splitlines()
+          out, in_class, dropped = [], False, 0
+          for ln in lines:
+              if ln.startswith("class AeroApp"):
+                  in_class = True
+              if in_class and ln.strip().startswith("import "):
+                  dropped += 1
+                  continue
+              out.append(ln)
+          ap.write_text("\n".join(out) + "\n", encoding="utf-8")
+          print(f"AeroApp: removed {dropped} stray import(s) inside class")
+
           te = root / "net/TransferEngine.kt"
           s = te.read_text(encoding="utf-8")
           if "import com.aero.share.core.Identity" not in s:
@@ -73,91 +33,44 @@ jobs:
                             "import com.aero.share.core.Hash\nimport com.aero.share.core.Identity", 1)
               print("FIXED: Identity import")
           else:
-              print("OK: Identity import present")
-          if "when (val m = Proto.read<Msg>(inp).type) {" in s:
-              s = s.replace("when (val m = Proto.read<Msg>(inp).type) {",
-                            "val m = Proto.read<Msg>(inp)\n                when (m.type) {", 1)
-              print("FIXED: when dispatch")
+              print("OK: Identity import")
+
+          block = '''            while (true) {
+                val m = Proto.read<Msg>(inp)
+                when (m.type) {
+                    "FILE" -> receiveFile(m.id ?: throw IOException("No file id"))
+                    "DONE" -> {
+                        Proto.write(out, Msg("DONE_ACK", transferId = tid))
+                        setState(TState.Completed)
+                        record(_active.value!!)
+                        Feedback.success(ctx, cfg)
+                        return
+                    }
+                    "PAUSE" -> {
+                        pausedReceives[tid] = done.toList()
+                        setState(TState.Paused)
+                        return
+                    }
+                    "CANCEL" -> {
+                        setState(TState.Cancelled)
+                        record(_active.value!!)
+                        return
+                    }
+                    else -> throw IOException("Bad frame")
+                }
+            }
+          '''
+          i = s.find("            while (true) {")
+          j = s.find("        } catch (e: IntegrityException)")
+          if i != -1 and j != -1 and j > i:
+              s = s[:i] + block + s[j:]
+              print("FIXED: dispatch loop rewritten")
           else:
-              print("OK: when dispatch already split")
+              print(f"WARN: dispatch markers not found i={i} j={j}")
           te.write_text(s, encoding="utf-8")
           PY
-          echo "===== AeroApp.kt lines 15-45 ====="
+          echo "===== AeroApp.kt 15-45 ====="
           nl -ba app/src/main/java/com/aero/share/AeroApp.kt | sed -n '15,45p'
-          echo "===== TransferEngine.kt lines 330-375 ====="
+          echo "===== TransferEngine.kt 330-375 ====="
           nl -ba app/src/main/java/com/aero/share/net/TransferEngine.kt | sed -n '330,375p'
-          echo "===== END DIAGNOSTICS ====="
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Generate Gradle wrapper
-        working-directory: ${{ steps.proj.outputs.dir }}
-        run: |
-          if [ ! -f gradlew ] || [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
-            gradle wrapper --gradle-version 8.9 --distribution-type bin --no-daemon
-          fi
-          chmod +x gradlew
-
-      - name: Pack project ZIP
-        if: steps.proj.outputs.bootstrapped == 'true'
-        run: |
-          rm -f AERO_SHARE_PROJECT.zip
-          zip -qr AERO_SHARE_PROJECT.zip "${{ steps.proj.outputs.dir }}" -x '*/.gradle/*' '*/build/*'
-
-      - name: Run unit tests
-        working-directory: ${{ steps.proj.outputs.dir }}
-        run: ./gradlew testDebugUnitTest --no-daemon
-
-      - name: Build debug APK
-        working-directory: ${{ steps.proj.outputs.dir }}
-        run: ./gradlew assembleDebug --no-daemon
-
-      - name: Verify APK
-        run: |
-          APK="${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
-          ls -lh "$APK"
-
-      - name: Commit validated ZIP
-        if: >-
-          steps.proj.outputs.bootstrapped == 'true' &&
-          github.event_name != 'pull_request' &&
-          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f AERO_SHARE_PROJECT.zip
-          git rm -r -f --ignore-unmatch parts make_project.py
-          git commit -m "CI: pack validated AERO_SHARE_PROJECT.zip [skip ci]" || exit 0
-          git push
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: AERO-SHARE-APK
-          path: ${{ steps.proj.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload reports on failure
-        if: failure() && steps.proj.outputs.dir != ''
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-reports
-          path: ${{ steps.proj.outputs.dir }}/app/build/reports
-          if-no-files-found: ignore
-          retention-days: 7
+          echo "===== END ====="
